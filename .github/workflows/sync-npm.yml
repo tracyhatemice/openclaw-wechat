@@ -1,0 +1,65 @@
+name: Sync from npm
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # daily at midnight UTC
+  workflow_dispatch: # manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Get latest npm version
+        id: npm-version
+        run: |
+          LATEST=$(npm view @tencent-weixin/openclaw-weixin version)
+          echo "version=$LATEST" >> "$GITHUB_OUTPUT"
+          echo "Latest npm version: $LATEST"
+
+      - name: Check if update needed
+        id: check
+        run: |
+          CURRENT=$(node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")
+          echo "Current repo version: $CURRENT"
+          if [ "$CURRENT" = "${{ steps.npm-version.outputs.version }}" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Already up to date"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Update needed: $CURRENT -> ${{ steps.npm-version.outputs.version }}"
+          fi
+
+      - name: Download and unpack
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          # Download the tarball
+          npm pack @tencent-weixin/openclaw-weixin@${{ steps.npm-version.outputs.version }}
+
+          # Remove all tracked files except .git and .github
+          git ls-files -z | xargs -0 rm -f
+
+          # Unpack tarball (npm pack creates tencent-weixin-openclaw-weixin-*.tgz)
+          tar xzf tencent-weixin-openclaw-weixin-*.tgz --strip-components=1 -C .
+
+          # Clean up tarball
+          rm -f tencent-weixin-openclaw-weixin-*.tgz
+
+      - name: Commit and push
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "sync upstream: v${{ steps.npm-version.outputs.version }}"
+          git push
