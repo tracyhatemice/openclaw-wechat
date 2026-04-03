@@ -46,8 +46,8 @@ jobs:
           # Download the tarball
           npm pack @tencent-weixin/openclaw-weixin@${{ steps.npm-version.outputs.version }}
 
-          # Remove all tracked files except .git, .github, and .gitignore
-          git ls-files -z | grep -zv -e '^\.github/' -e '^\.gitignore$' | xargs -0 rm -f
+          # Remove all tracked files except .git, .github, .gitignore, and contrib/
+          git ls-files -z | grep -zv -e '^\.github/' -e '^\.gitignore$' -e '^contrib/' | xargs -0 rm -f
 
           # Unpack tarball (npm pack creates tencent-weixin-openclaw-weixin-*.tgz)
           tar xzf tencent-weixin-openclaw-weixin-*.tgz --strip-components=1 -C .
