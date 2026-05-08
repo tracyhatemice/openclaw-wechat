@@ -2,7 +2,6 @@ import { getUpdates } from "../api/api.js";
 import { WeixinConfigManager } from "../api/config-cache.js";
 import { SESSION_EXPIRED_ERRCODE, pauseSession, getRemainingPauseMs } from "../api/session-guard.js";
 import { processOneMessage } from "../messaging/process-message.js";
-import { waitForWeixinRuntime } from "../runtime.js";
 import { getSyncBufFilePath, loadGetUpdatesBuf, saveGetUpdatesBuf } from "../storage/sync-buf.js";
 import { logger } from "../util/logger.js";
 import { redactBody } from "../util/redact.js";
@@ -15,20 +14,14 @@ const RETRY_DELAY_MS = 2_000;
  * Runs until abort.
  */
 export async function monitorWeixinProvider(opts) {
-    const { baseUrl, cdnBaseUrl, token, accountId, config, abortSignal, longPollTimeoutMs, setStatus, } = opts;
+    const { baseUrl, cdnBaseUrl, token, accountId, config, channelRuntime, abortSignal, longPollTimeoutMs, setStatus, } = opts;
     const log = opts.runtime?.log ?? (() => { });
     const errLog = opts.runtime?.error ?? ((m) => log(m));
     const aLog = logger.withAccount(accountId);
-    aLog.info(`waiting for Weixin runtime...`);
-    let channelRuntime;
-    try {
-        const pluginRuntime = await waitForWeixinRuntime();
-        channelRuntime = pluginRuntime.channel;
-        aLog.info(`Weixin runtime acquired, channelRuntime type: ${typeof channelRuntime}`);
-    }
-    catch (err) {
-        aLog.error(`waitForWeixinRuntime() failed: ${String(err)}`);
-        throw err;
+    if (!channelRuntime) {
+        const msg = "channelRuntime missing on monitor opts; gateway must inject ChannelGatewayContext.channelRuntime";
+        aLog.error(msg);
+        throw new Error(msg);
     }
     log(`weixin monitor started (${baseUrl}, account=${accountId})`);
     aLog.info(`Monitor started: baseUrl=${baseUrl} timeoutMs=${longPollTimeoutMs ?? DEFAULT_LONG_POLL_TIMEOUT_MS}`);

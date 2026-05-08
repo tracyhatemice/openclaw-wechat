@@ -161,7 +161,6 @@ function buildHeaders(opts) {
     const headers = {
         "Content-Type": "application/json",
         AuthorizationType: "ilink_bot_token",
-        "Content-Length": String(Buffer.byteLength(opts.body, "utf-8")),
         "X-WECHAT-UIN": randomWechatUin(),
         ...buildCommonHeaders(),
     };
@@ -217,7 +216,7 @@ export async function apiGetFetch(params) {
 export async function apiPostFetch(params) {
     const base = ensureTrailingSlash(params.baseUrl);
     const url = new URL(params.endpoint, base);
-    const hdrs = buildHeaders({ token: params.token, body: params.body });
+    const hdrs = buildHeaders({ token: params.token });
     logger.debug(`POST ${redactUrl(url.toString())} body=${redactBody(params.body)}`);
     const controller = params.timeoutMs !== undefined ? new AbortController() : undefined;
     const t = controller != null && params.timeoutMs !== undefined
