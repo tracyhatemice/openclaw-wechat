@@ -14,6 +14,7 @@ export async function sendWeixinErrorNotice(params) {
                 baseUrl: params.baseUrl,
                 token: params.token,
                 contextToken: params.contextToken,
+                ...(params.runId ? { runId: params.runId } : {}),
             } });
         logger.debug(`sendWeixinErrorNotice: sent to=${params.to}`);
     }

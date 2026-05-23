@@ -21,6 +21,8 @@ export const MessageItemType = {
     VOICE: 3,
     FILE: 4,
     VIDEO: 5,
+    TOOL_CALL_START: 11,
+    TOOL_CALL_RESULT: 12,
 };
 export const MessageState = {
     NEW: 0,

@@ -48,6 +48,9 @@ export async function monitorWeixinProvider(opts) {
                 token,
                 get_updates_buf: getUpdatesBuf,
                 timeoutMs: nextTimeoutMs,
+                // Stop/hot-reload should cancel the in-flight long-poll immediately
+                // instead of waiting for the server-side long-poll timeout.
+                abortSignal,
             });
             aLog.debug(`getUpdates response: ret=${resp.ret}, msgs=${resp.msgs?.length ?? 0}, get_updates_buf_length=${resp.get_updates_buf?.length ?? 0}`);
             if (resp.longpolling_timeout_ms != null && resp.longpolling_timeout_ms > 0) {

@@ -243,10 +243,37 @@ export async function apiGetFetch(params) {
     }
 }
 /**
+ * Combine an internal timeout controller with an optional external abort signal.
+ * This lets gateway channel-stop aborts cancel in-flight long-poll requests
+ * immediately while preserving the existing timeout-driven AbortError path.
+ */
+function combineAbortSignals(params) {
+    const { internal, external } = params;
+    if (!external) {
+        return { signal: internal?.signal, cleanup: () => { } };
+    }
+    if (!internal) {
+        return { signal: external, cleanup: () => { } };
+    }
+    if (external.aborted) {
+        internal.abort();
+        return { signal: internal.signal, cleanup: () => { } };
+    }
+    const onExternalAbort = () => internal.abort();
+    external.addEventListener("abort", onExternalAbort, { once: true });
+    return {
+        signal: internal.signal,
+        cleanup: () => external.removeEventListener("abort", onExternalAbort),
+    };
+}
+/**
  * Common fetch wrapper: POST JSON to a Weixin API endpoint.
  * When `timeoutMs` is provided, the request is aborted after that many milliseconds.
  * When omitted, no client-side timeout is applied (relies on OS/TCP stack).
  * Returns the raw response text on success; throws on HTTP error or timeout.
+ *
+ * When `abortSignal` is provided, an external abort (e.g. gateway channel stop)
+ * cancels the in-flight request immediately instead of waiting for `timeoutMs`.
  */
 export async function apiPostFetch(params) {
     const base = ensureTrailingSlash(params.baseUrl);
@@ -257,12 +284,16 @@ export async function apiPostFetch(params) {
     const t = controller != null && params.timeoutMs !== undefined
         ? setTimeout(() => controller.abort(), params.timeoutMs)
         : undefined;
+    const { signal, cleanup } = combineAbortSignals({
+        internal: controller,
+        external: params.abortSignal,
+    });
     try {
         const res = await fetch(url.toString(), {
             method: "POST",
             headers: hdrs,
             body: params.body,
-            ...(controller ? { signal: controller.signal } : {}),
+            ...(signal ? { signal } : {}),
         });
         if (t !== undefined)
             clearTimeout(t);
@@ -277,6 +308,9 @@ export async function apiPostFetch(params) {
         if (t !== undefined)
             clearTimeout(t);
         throw err;
+    }
+    finally {
+        cleanup();
     }
 }
 /**
@@ -298,14 +332,21 @@ export async function getUpdates(params) {
             token: params.token,
             timeoutMs: timeout,
             label: "getUpdates",
+            abortSignal: params.abortSignal,
         });
         const resp = JSON.parse(rawText);
         return resp;
     }
     catch (err) {
-        // Long-poll timeout is normal; return empty response so caller can retry
+        // Long-poll timeout or external abort are both normal control-flow exits.
+        // The monitor loop checks abortSignal after return and exits when needed.
         if (err instanceof Error && err.name === "AbortError") {
-            logger.debug(`getUpdates: client-side timeout after ${timeout}ms, returning empty response`);
+            if (params.abortSignal?.aborted) {
+                logger.debug(`getUpdates: aborted by external signal`);
+            }
+            else {
+                logger.debug(`getUpdates: client-side timeout after ${timeout}ms, returning empty response`);
+            }
             return { ret: 0, msgs: [], get_updates_buf: params.get_updates_buf };
         }
         throw err;

@@ -19,6 +19,7 @@ export async function applyWeixinMessageSendingHook(params) {
             metadata: {
                 channel: CHANNEL_ID,
                 accountId: params.accountId,
+                runId: params.runId,
                 ...(params.mediaUrl ? { mediaUrls: [params.mediaUrl] } : {}),
             },
         }, { channelId: CHANNEL_ID, accountId: params.accountId });
@@ -50,6 +51,7 @@ export function emitWeixinMessageSent(params) {
         channelId: CHANNEL_ID,
         accountId: params.accountId,
         conversationId: params.to,
+        runId: params.runId,
     });
     fireAndForgetHook(Promise.resolve(hookRunner.runMessageSent(toPluginMessageSentEvent(canonical), toPluginMessageContext(canonical))), "weixin: message_sent plugin hook failed");
 }

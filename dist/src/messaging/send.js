@@ -8,7 +8,7 @@ function generateClientId() {
 }
 /** Build a SendMessageReq containing a single text message. */
 function buildTextMessageReq(params) {
-    const { to, text, contextToken, clientId } = params;
+    const { to, text, contextToken, runId, clientId } = params;
     const item_list = text
         ? [{ type: MessageItemType.TEXT, text_item: { text } }]
         : [];
@@ -21,16 +21,18 @@ function buildTextMessageReq(params) {
             message_state: MessageState.FINISH,
             item_list: item_list.length ? item_list : undefined,
             context_token: contextToken ?? undefined,
+            run_id: runId ?? undefined,
         },
     };
 }
 /** Build a SendMessageReq from a reply payload (text only; image send uses sendImageMessageWeixin). */
 function buildSendMessageReq(params) {
-    const { to, contextToken, payload, clientId } = params;
+    const { to, contextToken, runId, payload, clientId } = params;
     return buildTextMessageReq({
         to,
         text: payload.text ?? "",
         contextToken,
+        runId,
         clientId,
     });
 }
@@ -46,6 +48,7 @@ export async function sendMessageWeixin(params) {
     const req = buildSendMessageReq({
         to,
         contextToken: opts.contextToken,
+        runId: opts.runId,
         payload: { text },
         clientId,
     });
@@ -63,12 +66,46 @@ export async function sendMessageWeixin(params) {
     }
     return { messageId: clientId };
 }
+/** Send a single structured MessageItem downstream. */
+export async function sendMessageItemWeixin(params) {
+    const { to, item, opts } = params;
+    if (!opts.contextToken) {
+        logger.warn(`sendMessageItemWeixin: contextToken missing for to=${to}, sending without context`);
+    }
+    const clientId = params.clientId ?? generateClientId();
+    const req = {
+        msg: {
+            from_user_id: "",
+            to_user_id: to,
+            client_id: clientId,
+            message_type: MessageType.BOT,
+            message_state: MessageState.FINISH,
+            item_list: [item],
+            context_token: opts.contextToken ?? undefined,
+            run_id: opts.runId,
+        },
+    };
+    try {
+        await sendMessageApi({
+            baseUrl: opts.baseUrl,
+            token: opts.token,
+            timeoutMs: opts.timeoutMs,
+            body: req,
+        });
+    }
+    catch (err) {
+        logger.error(`${params.label ?? "sendMessageItemWeixin"}: failed to=${to} clientId=${clientId} err=${String(err)}`);
+        throw err;
+    }
+    return { messageId: clientId };
+}
 /**
  * Send one or more MessageItems (optionally preceded by a text caption) downstream.
  * Each item is sent as its own request so that item_list always has exactly one entry.
  */
 async function sendMediaItems(params) {
     const { to, text, mediaItem, opts, label } = params;
+    const runId = opts.runId;
     const items = [];
     if (text) {
         items.push({ type: MessageItemType.TEXT, text_item: { text } });
@@ -86,6 +123,7 @@ async function sendMediaItems(params) {
                 message_state: MessageState.FINISH,
                 item_list: [item],
                 context_token: opts.contextToken ?? undefined,
+                run_id: runId,
             },
         };
         try {

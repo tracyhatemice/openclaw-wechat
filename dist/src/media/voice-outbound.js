@@ -1,6 +1,10 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { logger } from "../util/logger.js";
+const execFileAsync = promisify(execFile);
 const OGG_CAPTURE = Buffer.from("OggS");
 const OPUS_HEAD_MAGIC = Buffer.from("OpusHead");
 const GP_UNKNOWN = 0xffffffffffffffffn;
@@ -13,6 +17,18 @@ export const VOICE_ENCODE_OGG_SPEEX = 8;
  * `.ogg` is handled separately: only when the file is Ogg Opus (see {@link isWeixinVoiceOutboundPath}).
  */
 const VOICE_EXTENSIONS = new Set([".opus", ".silk", ".slk"]);
+const AUDIO_AS_VOICE_EXTENSIONS = new Set([
+    ".aac",
+    ".amr",
+    ".m4a",
+    ".mp3",
+    ".oga",
+    ".ogg",
+    ".opus",
+    ".silk",
+    ".slk",
+    ".wav",
+]);
 function readUint32LE(buf, o) {
     return buf.readUInt32LE(o);
 }
@@ -122,6 +138,77 @@ async function silkPlaytimeMsWithOptionalWasm(buf) {
         return null;
     }
 }
+async function ffprobePlaytimeMs(filePath) {
+    try {
+        const { stdout } = await execFileAsync("ffprobe", [
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            filePath,
+        ]);
+        const seconds = Number.parseFloat(stdout.trim());
+        if (!Number.isFinite(seconds) || seconds <= 0)
+            return null;
+        return Math.round(seconds * 1000);
+    }
+    catch (err) {
+        logger.debug(`voice-outbound: ffprobe duration unavailable err=${String(err)}`);
+        return null;
+    }
+}
+const WEIXIN_VOICE_TRANSCODE_SAMPLE_RATE = 48_000;
+const WEIXIN_VOICE_TRANSCODE_BITRATE = "64k";
+const WEIXIN_VOICE_TRANSCODE_MAX_SECS = 60;
+/**
+ * Transcode a generic audio file to Ogg/Opus for Weixin voice messages using ffmpeg.
+ * Returns the transcoded buffer on success, or null if ffmpeg is unavailable or fails.
+ * The caller should check the returned buffer with resolveWeixinOutboundVoiceMeta
+ * before uploading; if that also fails, degrade to a file attachment.
+ */
+export async function transcodeToWeixinVoiceOpus(filePath) {
+    const tmpPath = path.join(os.tmpdir(), `weixin-voice-${Date.now()}-${Math.random().toString(36).slice(2)}.ogg`);
+    try {
+        await execFileAsync("ffmpeg", [
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            filePath,
+            "-vn",
+            "-sn",
+            "-dn",
+            "-t",
+            String(WEIXIN_VOICE_TRANSCODE_MAX_SECS),
+            "-ar",
+            String(WEIXIN_VOICE_TRANSCODE_SAMPLE_RATE),
+            "-ac",
+            "1",
+            "-c:a",
+            "libopus",
+            "-b:a",
+            WEIXIN_VOICE_TRANSCODE_BITRATE,
+            "-f",
+            "ogg",
+            tmpPath,
+        ]);
+        return await fs.readFile(tmpPath);
+    }
+    catch (err) {
+        logger.warn(`voice-outbound: transcodeToWeixinVoiceOpus failed filePath=${filePath} err=${String(err)}`);
+        return null;
+    }
+    finally {
+        await fs.unlink(tmpPath).catch(() => { });
+    }
+}
+export function isWeixinAudioAsVoiceOutboundPath(filePath) {
+    const ext = path.extname(filePath).toLowerCase();
+    return AUDIO_AS_VOICE_EXTENSIONS.has(ext);
+}
 export async function isWeixinVoiceOutboundPath(filePath) {
     const ext = path.extname(filePath).toLowerCase();
     if (VOICE_EXTENSIONS.has(ext))
@@ -144,7 +231,7 @@ export async function isWeixinVoiceOutboundPath(filePath) {
  * Compute voice playtime (ms) and encoding hints for Weixin VOICE item.
  * Returns null if duration cannot be determined (caller should send as file).
  */
-export async function resolveWeixinOutboundVoiceMeta(filePath) {
+export async function resolveWeixinOutboundVoiceMeta(filePath, opts = {}) {
     const ext = path.extname(filePath).toLowerCase();
     const buf = await fs.readFile(filePath);
     if (ext === ".opus" || ext === ".ogg") {
@@ -169,6 +256,16 @@ export async function resolveWeixinOutboundVoiceMeta(filePath) {
             playtimeMs: ms,
             encode_type: VOICE_ENCODE_SILK,
             sample_rate: 24_000,
+        };
+    }
+    if (opts.allowGenericAudio && AUDIO_AS_VOICE_EXTENSIONS.has(ext)) {
+        const ms = await ffprobePlaytimeMs(filePath);
+        if (ms == null || ms <= 0) {
+            logger.warn(`voice-outbound: cannot resolve playtime for audioAsVoice ${ext} file via ffprobe filePath=${filePath} size=${buf.length}`);
+            return null;
+        }
+        return {
+            playtimeMs: ms,
         };
     }
     logger.warn(`voice-outbound: unsupported voice extension '${ext}' for filePath=${filePath}`);
